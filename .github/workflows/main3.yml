@@ -1,0 +1,69 @@
+name: Get-ARM64-Docker-Images-Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      docker_images:
+        description: '请输入要处理的 Docker 镜像列表，多个镜像用英文逗号分开'
+        required: true
+        default: 'shellngn/pro:latest'
+
+jobs:
+  pull_and_package:
+    runs-on: ubuntu-22.04
+
+    steps:
+      # Step 1: 检出代码库
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: 设置 Docker Buildx（启用多平台支持）
+      - name: Set up Docker Buildx
+        run: |
+          docker buildx create --use
+
+      # Step 3: 拉取并打包 Docker 镜像为 ARM64
+      - name: Pull Docker Images for ARM64
+        run: |
+          images="${{ github.event.inputs.docker_images }}"
+          IFS=',' read -r -a image_array <<< "$images"
+          for image in "${image_array[@]}"; do
+            echo "拉取镜像 ${image}，并适配 ARM64 架构"
+            docker pull "${image}" --platform "linux/arm64"
+            image_name="${image//\//_}"
+            image_name="${image_name//:/_}"
+            docker save "${image}" --platform linux/arm64 -o "${image_name}-arm64.tar"
+            gzip -c "${image_name}-arm64.tar" > "${image_name}-arm64.tar.gz"
+            rm "${image_name}-arm64.tar"
+          done
+
+      # Step 4: 列出生成的文件（调试步骤）
+      - name: List generated files (debug step)
+        run: |
+          echo "准备好的 Docker 镜像文件 (.tar.gz)："
+          find $GITHUB_WORKSPACE -name "*.tar.gz"
+
+      # Step 5: 创建 GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: DockerTarBuilder-ARM64
+          name: ${{ github.event.inputs.docker_images }} for ARM64
+          body: |
+            这是构建并为 ARM64 架构打包的 Docker 镜像。
+            ### 使用示例
+            `docker load -i alpine_latest-arm64.tar.gz`
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 6: 上传 Docker 镜像文件作为 Release 附件
+      - name: Upload Docker images as release assets
+        uses: softprops/action-gh-release@v2.1.0
+        with:
+          tag_name: DockerTarBuilder-ARM64
+          files: ${{ github.workspace }}/*.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
