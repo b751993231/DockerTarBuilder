@@ -1,0 +1,72 @@
+name: Build and Release ARM64 Docker Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      docker_images:
+        description: '请输入要处理的 Docker 镜像列表，多个镜像用英文逗号分开'
+        required: true
+        default: 'shellngn/pro:latest'
+
+jobs:
+  build_and_release:
+    runs-on: ubuntu-22.04
+
+    steps:
+      # Step 1: 检出代码库
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: 设置 Docker Buildx（启用多平台支持）
+      - name: Set up Docker Buildx
+        run: |
+          docker buildx create --use
+
+      # Step 3: 拉取并构建 Docker 镜像
+      - name: Pull and Build Docker Images for ARM64
+        run: |
+          images="${{ github.event.inputs.docker_images }}"
+          IFS=',' read -r -a image_array <<< "$images"
+          for image in "${image_array[@]}"; do
+            echo "Pulling image ${image} for ARM64 architecture"
+            docker pull "${image}" --platform "linux/arm64" || \
+              (echo "Image ${image} does not support ARM64. Attempting to build it." && \
+               docker buildx build --platform linux/arm64 -t "${image}-arm64" --push .)
+            # 对每个镜像，创建 ARM64 版本的 tar 包
+            image_name="${image//\//_}"
+            image_name="${image_name//:/_}"
+            docker save "${image}" --platform linux/arm64 -o "${image_name}-arm64.tar"
+            gzip -c "${image_name}-arm64.tar" > "${image_name}-arm64.tar.gz"
+            rm "${image_name}-arm64.tar"
+          done
+
+      # Step 4: 显示构建的文件列表（调试步骤）
+      - name: List generated files (debug step)
+        run: |
+          echo "准备的 Docker 镜像文件（.tar.gz）:"
+          find $GITHUB_WORKSPACE -name "*.tar.gz"
+
+      # Step 5: 创建 GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: DockerTarBuilder-ARM64
+          name: ${{ github.event.inputs.docker_images }} for ARM64
+          body: |
+            这是构建并为 ARM64 架构打包的 Docker 镜像。
+            ### 使用示例
+            `docker load -i alpine_latest-arm64.tar.gz`
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 6: 上传生成的 .tar.gz 文件作为 Release 的附件
+      - name: Upload Docker images as release assets
+        uses: softprops/action-gh-release@v2.1.0
+        with:
+          tag_name: DockerTarBuilder-ARM64
+          files: ${{ github.workspace }}/*.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
